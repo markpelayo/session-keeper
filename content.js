@@ -12,9 +12,82 @@
   if (!SITE_ID) return;
   const DEF = SITE_DEFS[SITE_ID];
 
+  // ------------------------------------------------------ generation takeover
+  //
+  // Reloading or updating the extension ORPHANS any content script already
+  // running in an open tab: its code and timers keep going, but every chrome.*
+  // call now throws "Extension context invalidated".
+  //
+  // A plain boolean "already active" flag was wrong here. The orphan had set it
+  // to true and could only clear it on its next tick — so the freshly injected
+  // copy saw the flag, assumed a healthy instance was running, and bailed out.
+  // Net effect: the orphan kept throwing every 20s AND the tab was left with no
+  // working keeper at all.
+  //
+  // A generation counter fixes both. The newest injection always wins, and every
+  // older instance stands itself down the moment it notices it's been superseded.
+
+  const MY_GEN = (window.__sessionKeeperGen = (window.__sessionKeeperGen || 0) + 1);
+
+  // All content scripts belonging to this extension share one isolated world, so
+  // a newly injected copy can reach the previous copy's timer and stop it RIGHT
+  // NOW, rather than waiting up to 20s for that copy to notice it's superseded.
+  // Only IDs this extension created are ever cleared — page timers are untouched.
+  window.__sessionKeeperTimers = window.__sessionKeeperTimers || [];
+  for (const oldTimer of window.__sessionKeeperTimers.splice(0)) {
+    try { clearInterval(oldTimer); } catch (e) { /* no-op */ }
+  }
+
+  // Last line of defence. An orphaned instance can have a promise already in
+  // flight when its context dies, and that surfaces as a page-level
+  // "Uncaught (in promise)". Suppress ONLY that specific error — anything else,
+  // including the host page's own rejections, is left completely alone.
+  if (!window.__sessionKeeperRejectionHook) {
+    window.__sessionKeeperRejectionHook = true;
+    window.addEventListener('unhandledrejection', (ev) => {
+      const reason = ev && ev.reason;
+      const text = String(reason && reason.message ? reason.message : reason);
+      if (/Extension context invalidated/i.test(text)) ev.preventDefault();
+    });
+  }
+
   let nextDueAt = 0;
   let nudgeCount = 0;
   let currentRangeKey = DEF.defaultRange;
+  let timerId = null;
+  let stopped = false;
+
+  function contextAlive() {
+    try { return !!(chrome && chrome.runtime && chrome.runtime.id); } catch (e) { return false; }
+  }
+
+  function superseded() { return window.__sessionKeeperGen !== MY_GEN; }
+
+  function alive() { return !stopped && !superseded() && contextAlive(); }
+
+  function isInvalidated(err) {
+    return /context invalidated|Extension context|message port closed|receiving end does not exist/i
+      .test(String(err && err.message ? err.message : err));
+  }
+
+  function shutdown() {
+    stopped = true;
+    if (timerId) clearInterval(timerId);
+    timerId = null;
+    nextDueAt = 0;
+  }
+
+  // Every async call goes through this. An orphaned instance can still have a
+  // promise in flight when the context dies; without this it surfaces as an
+  // "Uncaught (in promise)" in the page console.
+  function guard(p) {
+    if (p && typeof p.catch === 'function') {
+      p.catch((e) => { if (isInvalidated(e)) shutdown(); });
+    }
+    return p;
+  }
+
+  if (!contextAlive()) return;
 
   // ---------------------------------------------------------------- scheduling
 
@@ -22,8 +95,7 @@
   // a fraud/automation heuristic could latch onto.
   function rollNextDelay(rangeKey) {
     const r = DEF.ranges[rangeKey] || DEF.ranges[DEF.defaultRange];
-    const ms = (r.min + Math.random() * (r.max - r.min)) * 60 * 1000;
-    return Math.round(ms);
+    return Math.round((r.min + Math.random() * (r.max - r.min)) * 60 * 1000);
   }
 
   function reschedule(rangeKey) {
@@ -73,13 +145,14 @@
 
   function keepaliveTarget() {
     // Avoid replaying a URL with a query string: params can carry actions.
-    // A bare path (or the origin root) is a plain, idempotent GET.
     if (location.search) return location.origin + '/';
     return location.origin + location.pathname;
   }
 
   async function keepaliveFetch() {
+    if (!alive()) return shutdown();
     const url = keepaliveTarget();
+    let payload;
     try {
       const res = await fetch(url, {
         credentials: 'include',
@@ -89,23 +162,27 @@
         redirect: 'follow',
         method: 'GET'
       });
-      // If we got bounced to a login page, the session is already gone.
       const loggedOut = /login|signin|sign-in|identity/i.test(res.url) && res.url !== url;
-      report({ type: 'KEEPALIVE_RESULT', ok: res.ok && !loggedOut, status: res.status, loggedOut, url });
+      payload = { type: 'KEEPALIVE_RESULT', ok: res.ok && !loggedOut, status: res.status, loggedOut, url };
     } catch (e) {
-      report({ type: 'KEEPALIVE_RESULT', ok: false, status: 0, loggedOut: false, url, error: String(e) });
+      payload = { type: 'KEEPALIVE_RESULT', ok: false, status: 0, loggedOut: false, url, error: String(e) };
     }
+    report(payload);
   }
 
   // ------------------------------------------------------------------ runner
 
   function report(payload) {
+    if (!alive()) return shutdown();
     try {
-      chrome.runtime.sendMessage({ site: SITE_ID, ...payload });
-    } catch (e) { /* extension reloaded — ignore */ }
+      guard(chrome.runtime.sendMessage({ site: SITE_ID, ...payload }));
+    } catch (e) {
+      if (isInvalidated(e)) shutdown();
+    }
   }
 
-  async function fire() {
+  function fire() {
+    if (!alive()) return shutdown();
     nudgeCount++;
 
     if (DEF.useEvents) sendActivityEvents();
@@ -113,7 +190,7 @@
     let didFetch = false;
     if (DEF.useKeepaliveFetch && nudgeCount % (DEF.fetchEveryNthNudge || 3) === 0) {
       didFetch = true;
-      keepaliveFetch();
+      guard(keepaliveFetch());
     }
 
     report({ type: 'DID_NUDGE', didFetch });
@@ -121,8 +198,22 @@
   }
 
   async function tick() {
-    const all = await chrome.storage.local.get(defaultSettings());
-    const cfg = all[SITE_ID] || { enabled: true, range: DEF.defaultRange };
+    // Cheap synchronous checks first. An orphaned or superseded instance never
+    // reaches a chrome.* call, which is what used to throw here.
+    if (!alive()) return shutdown();
+
+    let all;
+    try {
+      all = await chrome.storage.local.get(defaultSettings());
+    } catch (e) {
+      if (isInvalidated(e)) return shutdown();
+      return; // transient storage error — retry next tick
+    }
+
+    if (!alive()) return shutdown(); // context may have died during the await
+
+    // Fail closed: if settings are somehow missing, stay off rather than on.
+    const cfg = all[SITE_ID] || { enabled: false, range: DEF.defaultRange };
     if (!cfg.enabled) { nextDueAt = 0; return; }
 
     if (cfg.range !== currentRangeKey || !nextDueAt) {
@@ -132,20 +223,24 @@
     if (Date.now() >= nextDueAt) fire();
   }
 
-  // Driven from two directions: alarms in the service worker (which keep firing
-  // when the tab is backgrounded and setInterval gets throttled), and a local
-  // timer (which covers the gaps when the service worker has been torn down).
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg && msg.type === 'KEEPALIVE_TICK') tick();
-  });
-  setInterval(tick, 20000);
-  tick();
+  try {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg && msg.type === 'KEEPALIVE_TICK') guard(tick());
+    });
 
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes[SITE_ID]) {
-      const next = changes[SITE_ID].newValue;
-      if (next && next.enabled) reschedule(next.range);
-      else nextDueAt = 0;
-    }
-  });
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (!alive()) return shutdown();
+      if (area === 'local' && changes[SITE_ID]) {
+        const next = changes[SITE_ID].newValue;
+        if (next && next.enabled) reschedule(next.range);
+        else nextDueAt = 0;
+      }
+    });
+  } catch (e) {
+    if (isInvalidated(e)) return shutdown();
+  }
+
+  timerId = setInterval(() => guard(tick()), 20000);
+  window.__sessionKeeperTimers.push(timerId);
+  guard(tick());
 })();

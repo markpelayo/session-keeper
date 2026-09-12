@@ -35,6 +35,7 @@ function buildCard(id, def) {
       </select>
     </div>
     <div class="ceiling">${def.ceilingNote}</div>
+    <div class="rangewarn" id="wn-${id}" hidden></div>
     <div class="stats" id="st-${id}">…</div>
   `;
   cardsEl.appendChild(card);
@@ -55,9 +56,19 @@ async function render() {
   const settings = await chrome.storage.local.get(defaultSettings());
 
   for (const [id, def] of Object.entries(SITE_DEFS)) {
-    const cfg = settings[id] || { enabled: true, range: def.defaultRange };
+    const cfg = settings[id] || { enabled: false, range: def.defaultRange };
     document.getElementById(`en-${id}`).checked = cfg.enabled;
     document.getElementById(`rg-${id}`).value = cfg.range;
+
+    // Surface the caution attached to the widest ("max") range.
+    const warnEl = document.getElementById(`wn-${id}`);
+    const chosen = def.ranges[cfg.range];
+    if (chosen && chosen.warn) {
+      warnEl.textContent = chosen.warn;
+      warnEl.hidden = false;
+    } else {
+      warnEl.hidden = true;
+    }
 
     const stats = (await chrome.storage.local.get({ [`stats_${id}`]: {} }))[`stats_${id}`] || {};
     const tabs = await chrome.tabs.query({ url: def.urlGlob });

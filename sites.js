@@ -20,11 +20,19 @@ const SITE_DEFS = {
     // Strategy: synthetic activity events only.
     useEvents: true,
     useKeepaliveFetch: false,
-    defaultRange: '5-8',
+    defaultRange: '8-10',
     ranges: {
       '2-5':  { label: '2–5 minutes',  min: 2,  max: 5  },
       '5-8':  { label: '5–8 minutes',  min: 5,  max: 8  },
-      '8-10': { label: '8–10 minutes', min: 8,  max: 10 }
+      '8-10': { label: '8–10 minutes', min: 8,  max: 10 },
+      // Widest band: runs right up towards the sign-out limit. Assumes the
+      // shortest possible QBO setting (1 hour); 50 leaves a 10-minute buffer
+      // for Chrome's background-timer throttling, which can delay a tick by
+      // several minutes on a backgrounded tab.
+      '3-50': {
+        label: '3–50 minutes (max)', min: 3, max: 50,
+        warn: 'Assumes your QBO sign-out is set to 1 hour or more. If you shortened it, pick a narrower range.'
+      }
     },
     ceilingNote: 'Sign-out is 1–3 hours, so anything here is well inside the limit.'
   },
@@ -39,13 +47,20 @@ const SITE_DEFS = {
     // Fetch on every Nth nudge. At a 3–6 min range that lands every ~9–18 min,
     // comfortably inside the 60-minute cap without hammering the server.
     fetchEveryNthNudge: 3,
-    defaultRange: '3-6',
+    defaultRange: '5-8',
     ranges: {
       '2-4': { label: '2–4 minutes', min: 2, max: 4 },
       '3-6': { label: '3–6 minutes', min: 3, max: 6 },
-      '5-8': { label: '5–8 minutes', min: 5, max: 8 }
+      '5-8': { label: '5–8 minutes', min: 5, max: 8 },
+      // Widest band Xero allows. The ceiling here is the ~10-minute inactivity
+      // prompt, NOT the 60-minute sign-out — so there is only 1 minute of slack,
+      // and a throttled tick can eat it.
+      '3-9': {
+        label: '3–9 minutes (max)', min: 3, max: 9,
+        warn: 'Only ~1 min under Xero’s 10-min prompt. If the "still there?" dialog appears, drop to 5–8.'
+      }
     },
-    ceilingNote: 'Capped at 8 min — Xero prompts at ~10 min of no input.'
+    ceilingNote: 'Ceiling is Xero’s ~10-min inactivity prompt, not the 60-min sign-out.'
   }
 };
 
@@ -56,12 +71,20 @@ function siteIdForHost(host) {
   return null;
 }
 
+// Bump this when the shipped defaults change and you want them re-applied to
+// existing installs (see applyDefaults() in background.js).
+const DEFAULTS_VERSION = 3;
+
+// Both sites start switched OFF. Nothing touches QuickBooks or Xero until you
+// deliberately turn it on.
 function defaultSettings() {
   const s = {};
   for (const [id, def] of Object.entries(SITE_DEFS)) {
-    s[id] = { enabled: true, range: def.defaultRange };
+    s[id] = { enabled: false, range: def.defaultRange };
   }
   return s;
 }
 
-if (typeof module !== 'undefined') module.exports = { SITE_DEFS, siteIdForHost, defaultSettings };
+if (typeof module !== 'undefined') {
+  module.exports = { SITE_DEFS, siteIdForHost, defaultSettings, DEFAULTS_VERSION };
+}

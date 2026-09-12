@@ -5,6 +5,15 @@ const ALARM_NAME = 'session-keeper-tick';
 
 async function initSettings() {
   const defs = defaultSettings();
+  const { defaultsVersion } = await chrome.storage.local.get({ defaultsVersion: 0 });
+
+  // Fresh install, or the shipped defaults changed since this install last saw
+  // them: apply them wholesale. Otherwise leave the user's own choices alone.
+  if (defaultsVersion < DEFAULTS_VERSION) {
+    await chrome.storage.local.set({ ...defs, defaultsVersion: DEFAULTS_VERSION });
+    return;
+  }
+
   const current = await chrome.storage.local.get(defs);
   await chrome.storage.local.set({ ...defs, ...current });
 }
@@ -15,7 +24,31 @@ function scheduleAlarm() {
   chrome.alarms.create(ALARM_NAME, { periodInMinutes: 0.5 });
 }
 
-chrome.runtime.onInstalled.addListener(async () => { await initSettings(); scheduleAlarm(); });
+// After an install or update, Chrome does NOT inject content scripts into tabs
+// that are already open — so a QuickBooks tab you had open would sit there with
+// no keepalive at all (and an orphaned old script throwing "Extension context
+// invalidated") until you manually refreshed it. Re-inject explicitly instead.
+async function reinjectOpenTabs() {
+  for (const def of Object.values(SITE_DEFS)) {
+    let tabs = [];
+    try { tabs = await chrome.tabs.query({ url: def.urlGlob }); } catch (e) { continue; }
+    for (const tab of tabs) {
+      if (tab.discarded) continue;
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['sites.js', 'content.js']
+        });
+      } catch (e) { /* restricted page or tab closed — skip */ }
+    }
+  }
+}
+
+chrome.runtime.onInstalled.addListener(async () => {
+  await initSettings();
+  scheduleAlarm();
+  await reinjectOpenTabs();
+});
 chrome.runtime.onStartup.addListener(scheduleAlarm);
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {

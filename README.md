@@ -1,65 +1,72 @@
 # Session Keeper — QuickBooks Online & Xero
 
-Stops idle sign-outs on both sites. Independent toggles, because the two sites
-need genuinely different techniques.
+A Chrome extension that stops QuickBooks Online and Xero signing you out for
+inactivity. It never clicks, never types, and never reloads your page, so work in
+progress is never lost.
+
+Both sites ship **switched off**. Nothing happens until you turn one on.
 
 ## Install
 
 1. Open `chrome://extensions`
 2. Turn on **Developer mode** (top right)
 3. **Load unpacked** → select this folder
+4. Click the yellow **S** icon and switch on the site you want
 
 ## Do this first (QuickBooks only)
 
-QBO lets you raise its own limit, and that costs nothing:
+QuickBooks lets you raise its own limit for free:
 
-**Settings ⚙️ → Account and Settings → Advanced → Other preferences → Edit →
+**Settings ⚙️ → Account and Settings → Advanced → Other preferences →
 "Sign me out if inactive for" → 3 hours**
 
-Master Admin only; applies to all users on the company file. Xero has no
-equivalent setting — their 60-minute cap is fixed.
+Master Admin only, and it applies to everyone on the company file. If 3 hours
+covers your day, you may not need the extension at all. Xero has no equivalent —
+its limit is fixed.
 
-## Why two separate toggles
+## How it works
 
-| | The clock | What actually resets it | What this extension does |
+The two sites need different techniques, which is why they have separate toggles.
+
+| | The clock | What resets it | What the extension does |
 |---|---|---|---|
-| **QuickBooks Online** | 1–3 hr idle timeout, admin-configurable | mouse / keyboard input | synthetic activity events |
-| **Xero** | ~10 min inactivity prompt | mouse / keyboard input | synthetic activity events |
-| **Xero** | **60 min hard session cap**, not configurable | a server round-trip | silent background `fetch()` |
+| **QuickBooks** | 1–3 hr idle timeout (admin-configurable) | mouse / keyboard | synthetic activity events |
+| **Xero** | ~10 min inactivity prompt | mouse / keyboard | synthetic activity events |
+| **Xero** | **60 min session cap** (fixed) | a server round-trip | silent background `fetch()` |
 
-Mouse movement does nothing for Xero's 60-minute cap — that clock only resets
-when the server sees a request. Xero's own advice is to press F5, which would
-destroy anything you're mid-way through entering. So instead the extension
-issues the same request F5 would, as a background `fetch()` with the response
-discarded. Your page is never re-rendered and nothing in progress is lost.
+Mouse movement does nothing for Xero's 60-minute cap — only a request to the
+server resets it. Xero's own advice is to press F5, which would destroy anything
+you're part-way through entering. Instead the extension issues the same request
+F5 would, as a background fetch with the response discarded. The page is never
+re-rendered.
 
-## Interval ranges, and why Xero's are tighter
+## Settings
 
-Timing is **randomised inside the range** on every cycle, so requests never
-arrive on a fixed cadence that an automation heuristic could spot.
+Each site has a toggle and an interval range. Timing is **randomised inside the
+range** every cycle, so requests never arrive on a fixed, machine-looking cadence.
 
-| Site | Options | Must stay under |
-|---|---|---|
-| QuickBooks | 2–5 / 5–8 / 8–10 min | 60 min (shortest possible idle timeout) |
-| Xero | 2–4 / 3–6 / 5–8 min | **10 min** (the inactivity prompt) |
+| Site | Options | Default | Ceiling |
+|---|---|---|---|
+| QuickBooks | 2–5 / 5–8 / **8–10** / 3–50 (max) min | 8–10 | 60 min sign-out |
+| Xero | 2–4 / 3–6 / **5–8** / 3–9 (max) min | 5–8 | ~10 min prompt |
 
-Xero tops out at 8 rather than 10 deliberately — an 8–10 range could land right
-on the 10-minute prompt. On Xero the keepalive fetch fires on every 3rd nudge,
-so roughly every 9–18 minutes, well inside the 60-minute cap.
+The ceilings are different kinds of limit, which is why the "max" options differ
+so much. For QuickBooks the ceiling is a real sign-out, so max is 50 — a
+10-minute buffer for Chrome's background-timer throttling. For Xero the ceiling
+is only the "are you still there?" prompt, so max is 9; missing one there is
+cosmetic, because the keepalive fetch is what protects the actual session.
+Selecting either max shows a caution explaining its assumption.
 
 ## What it will not do
 
-Verified by scanning the source — the only occurrences of these words are in
-comments:
+- **no** `click`, `mousedown`, `mouseup` — cannot press a button
+- **no** `submit` — cannot submit a form or save a transaction
+- **no** printable keystroke — the only key event is Shift, which inserts nothing
+- **no** `location.reload()` — never refreshes the page you're working in
 
-- **no `click`, `mousedown`, `mouseup`** — cannot press a button
-- **no `submit`** — cannot submit a form or save a transaction
-- **no printable keystroke** — the only key event is Shift, which inserts nothing
-- **no `location.reload()`** — never refreshes the page you're working in
-
-The single exception, and it's in `background.js`: if Chrome's Memory Saver has
-already **discarded** a tab, the extension reloads it. A discarded tab has
-already lost its in-memory state, so there is no unsaved work left to destroy.
+The one exception, in `background.js`: if Chrome's Memory Saver has already
+**discarded** a tab, the extension reloads it. A discarded tab has already lost
+its in-memory state, so there's no unsaved work left to destroy.
 
 ## Limitations
 
@@ -67,24 +74,44 @@ already lost its in-memory state, so there is no unsaved work left to destroy.
   fixed window regardless of activity, and force re-auth on MFA and security
   events. Expect to sign in roughly once a day.
 - **Synthetic events are `isTrusted: false`.** If either site filters on that
-  flag, the event layer is inert. Only a `chrome.debugger` build produces
-  trusted events, at the cost of a permanent "being debugged" banner.
-- **QuickBooks has no keepalive fetch.** If QBO turns out to track idleness
-  server-side, it needs the same treatment Xero gets — easy to enable, it's a
-  one-line flag in `sites.js`.
+  flag, the event layer is inert. Only a `chrome.debugger` build produces trusted
+  events, at the cost of a permanent "being debugged" banner.
+- **QuickBooks has no keepalive fetch**, on the theory its timeout is
+  client-side. If nudges are firing and you're still signed out, flip
+  `useKeepaliveFetch` for `qbo` in `sites.js`.
 
-## Testing it
+## Troubleshooting
 
-Sign in, open the popup, confirm the counters increment. On Xero also watch
-"Last keepalive" — it should read `ok (200)`. Then leave the tab untouched past
-the timeout. The popup flags **Session appears signed out** if a keepalive gets
-bounced to a login page.
+**"Extension context invalidated" in the console.** You're seeing a dead copy of
+the script left behind by an extension reload. Check DevTools → Sources →
+Content scripts: if there's a `VM##### content.js` alongside `content.js`, that's
+the corpse. The toggle can't stop it — switching off writes to `chrome.storage`,
+which is the exact API that's dead inside an orphan.
+
+**Fix: hard-refresh the tab once (⌘⇧R).** Since 2.5.0 the extension cleans up
+after itself on reload, so this should be a one-time step.
+
+**Is it actually running?** Open the popup and watch the nudge counter climb. On
+Xero, "Last keepalive" should read `ok (200)`. If it says failed, or you see
+"Session appears signed out", the fetch isn't holding the session.
 
 ## Adding another site
 
-Add an entry to `SITE_DEFS` in `sites.js` and add the domain to `matches` and
+Add an entry to `SITE_DEFS` in `sites.js`, then add the domain to `matches` and
 `host_permissions` in `manifest.json`. The popup builds its cards from
-`SITE_DEFS`, so a new site gets its toggle, dropdown and stats automatically.
+`SITE_DEFS`, so the new site gets its toggle, dropdown and stats automatically.
+
+## Files
+
+| File | Role |
+|---|---|
+| `manifest.json` | MV3 manifest, permissions, icons |
+| `sites.js` | Site definitions, interval ranges, defaults — **edit this first** |
+| `content.js` | The nudge engine; runs in QBO/Xero tabs |
+| `background.js` | Alarms, anti-discard, re-injection, stats |
+| `popup.html` / `popup.js` | The toggle UI |
+
+Version history is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Note
 
