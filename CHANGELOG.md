@@ -6,6 +6,69 @@ versioning.
 
 ---
 
+## [3.3.0] — 2026-09-16
+
+Performance and leak pass. No change to what the extension does.
+
+### Fixed — memory leaks
+
+- **Orphaned `MutationObserver`s accumulated.** Only the previous copy's timer
+  was torn down on re-injection; its observer stayed attached and kept receiving
+  every subtree mutation for the life of the page. Repeated extension reloads in
+  one page session stacked them up. There is now a shared teardown registry, so
+  a new copy disconnects the old observer *and* clears its timer immediately.
+- **`shutdown()` leaked the observer.** It cleared the interval but never
+  disconnected the observer or released the cached settings. It now releases
+  everything and is idempotent.
+- **A pending debounce timer could fire after shutdown.** The debounce is gone
+  entirely (see below), so there is no longer any `setTimeout` to leak.
+
+### Fixed — bugs
+
+- **Any settings write re-rolled the nudge schedule.** Ticking the auto-answer
+  checkbox reset the timer and delayed the next nudge. The schedule is now only
+  re-rolled when the interval actually changes, or when a site is switched on.
+- **A dialog already on screen could be missed for up to 20s.** The observer
+  only sees nodes added after it attaches, so a dialog showing at injection time
+  (or after a re-injection) waited for the next tick. One scan now runs as soon
+  as settings load.
+- **A label split across nested spans would not match.** `Continue` +
+  `working` in separate spans reads as `Continueworking` via `textContent`.
+  Labels are now normalised (lowercase, letters only), so all spacing variants
+  match — and the allowlist is exact-match rather than a regex, which is both
+  tighter and faster.
+
+### Performance
+
+- **No more forced reflows.** Label reading used `innerText`, which forces a
+  layout, and did it for every button on the page on every scan. Now
+  `textContent`, which does not.
+- **Mutation handling is incremental.** The observer previously debounced and
+  then re-scanned the entire document; it now inspects only the nodes that were
+  just added, with a 250 ms floor and the tick-driven full scan as a safety net.
+  This was the extension's single largest cost on a page as busy as QBO.
+- **Settings are cached in memory**, refreshed via `chrome.storage.onChanged`.
+  Every 20s tick and every dialog check previously did its own
+  `chrome.storage.local.get()` — one IPC round trip per tab, indefinitely. Now
+  one read at startup, plus one per actual change.
+- **The 30s alarm only runs while a site is enabled.** It previously fired
+  forever, waking the service worker ~2,880 times a day even with both toggles
+  off and no QuickBooks tab open.
+- **Stats writes cut from three storage operations to two.** The counter paths
+  did their own `get()` and then called a `bumpStats()` that did a second one.
+- **Popup does one storage read.** It was 1 + N sequential reads plus N
+  sequential tab queries every 5 seconds while open; now a single read with the
+  tab queries in parallel, and overlapping renders are prevented.
+
+### Verified unchanged
+
+The click gate was re-tested end to end: `Sign out`, `Continue` (for QBO),
+`Cancel`, `Save and close`, `Delete` and `Yes, delete forever` are all still
+rejected, as are delete-confirmation and unsaved-changes dialogs. Only
+`Continue working` inside an idle-prompt dialog clicks.
+
+---
+
 ## [3.2.0] — 2026-09-16
 
 3.1.0 fixed *why* a bad health verdict was produced. This fixes the fact that

@@ -72,10 +72,43 @@ function buildCard(id, def) {
   }
 }
 
-async function render() {
-  const settings = await chrome.storage.local.get(defaultSettings());
+let rendering = false;
 
-  for (const [id, def] of Object.entries(SITE_DEFS)) {
+async function render() {
+  // The 5s interval could previously overlap a slow render with the next one.
+  if (rendering) return;
+  rendering = true;
+  try {
+    await renderOnce();
+  } finally {
+    rendering = false;
+  }
+}
+
+async function renderOnce() {
+  const ids = Object.keys(SITE_DEFS);
+
+  // One storage read for everything, and the tab queries in parallel.
+  // Previously this was 1 + N sequential storage reads plus N sequential tab
+  // queries, every 5 seconds, for the whole time the popup was open.
+  const wanted = { ...defaultSettings() };
+  for (const id of ids) wanted[`stats_${id}`] = {};
+
+  const [store, tabCounts] = await Promise.all([
+    chrome.storage.local.get(wanted),
+    Promise.all(ids.map((id) =>
+      chrome.tabs.query({ url: globsFor(SITE_DEFS[id]) })
+        .then((t) => t.length)
+        .catch(() => 0)
+    ))
+  ]);
+
+  const settings = store;
+
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    const def = SITE_DEFS[id];
+    const tabCount = tabCounts[i];
     const cfg = settings[id] || { enabled: false, range: def.defaultRange };
     document.getElementById(`en-${id}`).checked = cfg.enabled;
     document.getElementById(`rg-${id}`).value = cfg.range;
@@ -92,10 +125,9 @@ async function render() {
       warnEl.hidden = true;
     }
 
-    const stats = (await chrome.storage.local.get({ [`stats_${id}`]: {} }))[`stats_${id}`] || {};
-    const tabs = await chrome.tabs.query({ url: globsFor(def) });
+    const stats = settings[`stats_${id}`] || {};
 
-    let html = `${cfg.enabled ? 'Running' : 'Paused'} · ${tabs.length} tab${tabs.length === 1 ? '' : 's'} open<br>`;
+    let html = `${cfg.enabled ? 'Running' : 'Paused'} · ${tabCount} tab${tabCount === 1 ? '' : 's'} open<br>`;
     html += `Last nudge: ${ago(stats.lastNudge)} · total ${stats.nudges || 0}`;
 
     if (def.useKeepaliveFetch) {

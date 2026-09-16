@@ -65,11 +65,15 @@ certainly because they carry `isTrusted: false` — and shows its own "Are you
 still working?" dialog. Leaving that dialog unanswered signs you out, so it has
 to be answered. That's the only reason this extension clicks anything.
 
-Three independent conditions must **all** hold before a click happens:
+Four conditions must **all** hold before a click happens:
 
-1. the surrounding dialog text matches that site's idle-prompt wording
-2. the button's label is an **exact** match for a session-extend label
-3. the label does not match the deny list (`sign out`, `log out`, `cancel`, `no…`)
+1. the button's normalised label is in that site's **exact-match allowlist**
+2. that label is not in the deny list (`sign out`, `log out`, `cancel`, `no`…)
+3. an ancestor's text matches that site's idle-prompt wording
+4. the button is visible and enabled
+
+Labels are normalised to lowercase letters only, so spacing variants and labels
+split across nested spans all match.
 
 So it can only press "Continue working" inside a box that says "Are you still
 working?". Bare "Continue" is deliberately rejected for QuickBooks, since the
@@ -145,6 +149,22 @@ Xero, "Last keepalive" should read `ok (200)`. If it says failed, or you see
 Add an entry to `SITE_DEFS` in `sites.js`, then add the domain to `matches` and
 `host_permissions` in `manifest.json`. The popup builds its cards from
 `SITE_DEFS`, so the new site gets its toggle, dropdown and stats automatically.
+
+## Resource use
+
+Designed to be close to free when idle:
+
+| | Behaviour |
+|---|---|
+| Settings reads | One per tab at startup, then only on an actual change (cached in memory) |
+| Service-worker wakeups | 30s alarm, but **only while a site is enabled** — nothing when both are off |
+| Mutation handling | Inspects only newly-added nodes, 250 ms floor; no full-document rescans |
+| Layout reflows | None — labels are read with `textContent`, never `innerText` |
+| Long-lived resources | One interval, one `MutationObserver`; both torn down on shutdown and on re-injection |
+
+Every long-lived resource is registered in a shared teardown list, so a newly
+injected copy of the content script releases the previous copy's interval and
+observer immediately rather than leaving them attached to the page.
 
 ## Files
 

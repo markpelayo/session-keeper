@@ -35,11 +35,19 @@ const SITE_DEFS = {
     idleDialog: {
       // ALL THREE must match before anything is clicked.
       match: /are you still working|haven'?t been active|still there\?/i,
+      // Exact-match allowlist, compared after normalising (lowercase, strip
+      // everything that isn't a letter). Replaces the old regex-on-innerText
+      // approach: reading innerText forces a layout reflow, and doing that for
+      // every button on a page this large was the single most expensive thing
+      // the extension did. Normalising also makes matching immune to a label
+      // split across nested spans, which textContent would otherwise mangle
+      // into "Continueworking".
+      //
       // Bare "Continue" is deliberately NOT accepted here: QBO's button is
       // labelled "Continue working", so allowing the generic word would only
       // widen the blast radius for no benefit.
-      confirmText: /^(continue working|keep working|i'?m still (here|working)|stay signed in)$/i,
-      denyText: /sign ?out|log ?out|cancel|no,?\s/i
+      confirmLabels: ['Continue working', 'Keep working', "I'm still here", "I'm still working", 'Stay signed in'],
+      denyLabels: ['Sign out', 'Log out', 'Cancel', 'No', 'No thanks', 'Not now']
     },
     ranges: {
       '2-5':  { label: '2–5 minutes',  min: 2,  max: 5  },
@@ -70,8 +78,11 @@ const SITE_DEFS = {
     defaultRange: '5-8',
     idleDialog: {
       match: /are you still (there|working)|haven'?t been active|session.{0,20}(expire|time ?out)/i,
-      confirmText: /^(continue|continue working|keep working|stay signed in|i'?m still (here|working)|yes,? ?keep me signed in)$/i,
-      denyText: /sign ?out|log ?out|cancel|no,?\s/i
+      confirmLabels: [
+        'Continue', 'Continue working', 'Keep working', 'Stay signed in',
+        "I'm still here", "I'm still working", 'Yes, keep me signed in'
+      ],
+      denyLabels: ['Sign out', 'Log out', 'Logout', 'Cancel', 'No', 'No thanks', 'Not now']
     },
     ranges: {
       '2-4': { label: '2–4 minutes', min: 2, max: 4 },
@@ -120,6 +131,22 @@ function globsFor(def) {
   return [def.urlGlob].concat(def.extraGlobs || []);
 }
 
+// Lowercase, letters only. "Continue working", "continue  working" and
+// "Continueworking" all collapse to the same key.
+function normLabel(s) {
+  return String(s == null ? '' : s).toLowerCase().replace(/[^a-z]/g, '');
+}
+
+// Precompute normalised label sets once, rather than per scan.
+for (const def of Object.values(SITE_DEFS)) {
+  if (!def.idleDialog) continue;
+  def.idleDialog.confirmSet = new Set((def.idleDialog.confirmLabels || []).map(normLabel));
+  def.idleDialog.denySet = new Set((def.idleDialog.denyLabels || []).map(normLabel));
+}
+
 if (typeof module !== 'undefined') {
-  module.exports = { SITE_DEFS, siteIdForHost, defaultSettings, DEFAULTS_VERSION, globsFor, SKIP_HOST };
+  module.exports = {
+    SITE_DEFS, siteIdForHost, defaultSettings, DEFAULTS_VERSION,
+    globsFor, SKIP_HOST, normLabel
+  };
 }

@@ -18,11 +18,30 @@ async function initSettings() {
   await chrome.storage.local.set({ ...defs, ...current });
 }
 
-function scheduleAlarm() {
-  // 30s is Chrome's floor. The content script does the real timing; this just
-  // guarantees it gets woken up even when the tab is in the background.
-  chrome.alarms.create(ALARM_NAME, { periodInMinutes: 0.5 });
+// 30s is Chrome's floor. The content script does the real timing; this just
+// guarantees it gets woken even when the tab is backgrounded and page timers
+// are throttled.
+//
+// The alarm is only kept alive while at least one site is enabled. Previously
+// it fired every 30s forever, waking the service worker around 2,880 times a
+// day even with both toggles off and no QuickBooks tab open.
+async function syncAlarm() {
+  const settings = await chrome.storage.local.get(defaultSettings());
+  const anyEnabled = Object.keys(SITE_DEFS).some((id) => settings[id] && settings[id].enabled);
+
+  const existing = await chrome.alarms.get(ALARM_NAME);
+  if (anyEnabled && !existing) {
+    chrome.alarms.create(ALARM_NAME, { periodInMinutes: 0.5 });
+  } else if (!anyEnabled && existing) {
+    await chrome.alarms.clear(ALARM_NAME);
+  }
 }
+
+// Re-evaluate whenever a toggle changes.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  if (Object.keys(SITE_DEFS).some((id) => id in changes)) syncAlarm();
+});
 
 // After an install or update, Chrome does NOT inject content scripts into tabs
 // that are already open — so a QuickBooks tab you had open would sit there with
@@ -46,7 +65,7 @@ async function reinjectOpenTabs() {
 
 chrome.runtime.onInstalled.addListener(async () => {
   await initSettings();
-  scheduleAlarm();
+  await syncAlarm();
   await reinjectOpenTabs();
 });
 // Health readings describe a live session. After a browser restart (or a macOS
@@ -70,7 +89,7 @@ async function clearVolatileStats() {
 
 chrome.runtime.onStartup.addListener(async () => {
   await clearVolatileStats();
-  scheduleAlarm();
+  await syncAlarm();
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
@@ -91,42 +110,49 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 
-async function bumpStats(site, patch) {
+// One read + one write per update. The counter paths previously did their own
+// get() and then called a bumpStats() that did a SECOND get() — three storage
+// operations where two suffice. `update` receives the current stats so a
+// counter can be incremented inside the same read.
+async function bumpStats(site, update) {
   const key = `stats_${site}`;
   const cur = (await chrome.storage.local.get({ [key]: {} }))[key] || {};
+  const patch = typeof update === 'function' ? update(cur) : update;
   await chrome.storage.local.set({ [key]: { ...cur, ...patch } });
 }
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (!msg || !msg.site) return;
-  if (msg.type === 'DID_NUDGE') {
-    chrome.storage.local.get({ [`stats_${msg.site}`]: {} }).then((r) => {
-      const cur = r[`stats_${msg.site}`] || {};
-      bumpStats(msg.site, { lastNudge: Date.now(), nudges: (cur.nudges || 0) + 1 });
-    });
-  }
-  if (msg.type === 'DIALOG_DISMISSED') {
-    chrome.storage.local.get({ [`stats_${msg.site}`]: {} }).then((r) => {
-      const cur = r[`stats_${msg.site}`] || {};
-      bumpStats(msg.site, {
+
+  switch (msg.type) {
+    case 'DID_NUDGE':
+      bumpStats(msg.site, (cur) => ({
+        lastNudge: Date.now(),
+        nudges: (cur.nudges || 0) + 1
+      }));
+      break;
+
+    case 'DIALOG_DISMISSED':
+      bumpStats(msg.site, (cur) => ({
         lastDismiss: Date.now(),
         dismissals: (cur.dismissals || 0) + 1,
         lastDismissLabel: msg.label
-      });
-    });
-  }
-  if (msg.type === 'KEEPALIVE_RESULT') {
-    bumpStats(msg.site, {
-      lastFetch: Date.now(),
-      lastFetchOk: msg.ok,
-      lastFetchStatus: msg.status,
-      // Recorded so a bad reading can be traced to the tab that produced it.
-      lastFetchUrl: msg.url,
-      loggedOut: msg.loggedOut
-    });
-  }
+      }));
+      break;
 
-  if (msg.type === 'RESET_STATS' && msg.site) {
-    chrome.storage.local.set({ [`stats_${msg.site}`]: {} });
+    case 'KEEPALIVE_RESULT':
+      bumpStats(msg.site, {
+        lastFetch: Date.now(),
+        lastFetchOk: msg.ok,
+        lastFetchStatus: msg.status,
+        // Recorded so a bad reading can be traced to the tab that produced it.
+        lastFetchUrl: msg.url,
+        loggedOut: msg.loggedOut
+      });
+      break;
+
+    case 'RESET_STATS':
+      chrome.storage.local.set({ [`stats_${msg.site}`]: {} });
+      break;
   }
 });
