@@ -9,9 +9,11 @@ function ago(ts) {
 }
 
 function strategyText(def) {
+  // Ordered by what actually holds the session, not by layer number.
   const parts = [];
+  if (def.idleDialog) parts.push('answers the idle-timeout dialog');
   if (def.useEvents) parts.push('synthetic pointer + Shift-key activity');
-  if (def.useKeepaliveFetch) parts.push('silent background fetch (resets the server session clock)');
+  if (def.useKeepaliveFetch) parts.push('silent background fetch');
   return parts.join(' · ');
 }
 
@@ -40,6 +42,14 @@ function buildCard(id, def) {
       <input type="checkbox" id="ad-${id}" />
       <span>Auto-answer the “still working?” dialog</span>
     </label>` : ''}
+    <label class="check">
+      <input type="checkbox" id="kf-${id}" />
+      <span>Keepalive fetch${def.fetchAuditWarning ? ` <em>— ${def.fetchAuditWarning}</em>` : ''}</span>
+    </label>
+    <label class="check">
+      <input type="checkbox" id="rv-${id}" />
+      <span>Reload tab if Chrome discards it <em>— counts as a fresh sign-in</em></span>
+    </label>
     <div class="rangewarn" id="wn-${id}" hidden></div>
     <div class="stats" id="st-${id}">…</div>
     <button class="reset" id="rs-${id}" type="button">Reset status</button>
@@ -59,6 +69,18 @@ function buildCard(id, def) {
 
   card.querySelector(`#rs-${id}`).addEventListener('click', async () => {
     await chrome.storage.local.set({ [`stats_${id}`]: {} });
+    render();
+  });
+
+  card.querySelector(`#kf-${id}`).addEventListener('change', async (e) => {
+    const cur = (await chrome.storage.local.get(defaultSettings()))[id];
+    await chrome.storage.local.set({ [id]: { ...cur, useFetch: e.target.checked } });
+    render();
+  });
+
+  card.querySelector(`#rv-${id}`).addEventListener('change', async (e) => {
+    const cur = (await chrome.storage.local.get(defaultSettings()))[id];
+    await chrome.storage.local.set({ [id]: { ...cur, reviveDiscarded: e.target.checked } });
     render();
   });
 
@@ -114,6 +136,10 @@ async function renderOnce() {
     document.getElementById(`rg-${id}`).value = cfg.range;
     const adEl = document.getElementById(`ad-${id}`);
     if (adEl) adEl.checked = cfg.autoDismiss !== false;
+    const useFetch = typeof cfg.useFetch === 'boolean' ? cfg.useFetch : !!def.useKeepaliveFetch;
+    document.getElementById(`kf-${id}`).checked = useFetch;
+    document.getElementById(`rv-${id}`).checked =
+      typeof cfg.reviveDiscarded === 'boolean' ? cfg.reviveDiscarded : !!def.useKeepaliveFetch;
 
     // Surface the caution attached to the widest ("max") range.
     const warnEl = document.getElementById(`wn-${id}`);
@@ -130,7 +156,7 @@ async function renderOnce() {
     let html = `${cfg.enabled ? 'Running' : 'Paused'} · ${tabCount} tab${tabCount === 1 ? '' : 's'} open<br>`;
     html += `Last nudge: ${ago(stats.lastNudge)} · total ${stats.nudges || 0}`;
 
-    if (def.useKeepaliveFetch) {
+    if (useFetch) {
       // A health verdict is only meaningful while it's current. Expire it after
       // 3x the maximum nudge interval (plus the fetch cadence) rather than
       // leaving a red alarm on screen indefinitely — a stale failure was

@@ -22,16 +22,30 @@ const SITE_DEFS = {
     hostPattern: /(^|\.)qbo\.intuit\.com$/i,
     urlGlob: 'https://*.qbo.intuit.com/*',
     extraGlobs: ['https://qbo.intuit.com/*'],
-    // Strategy: activity events + keepalive fetch + idle-dialog dismissal.
+    // Strategy: idle-dialog dismissal. NO keepalive fetch.
     //
-    // Confirmed in the field (2026-09-16): QBO shows its own "Are you still
-    // working?" dialog and does NOT count synthetic pointer/key events as
-    // activity — almost certainly because they carry isTrusted: false. So the
-    // event layer is kept (harmless, may still help) but is no longer relied on.
+    // The keepalive fetch was removed in 3.4.0. Requesting the app document
+    // with credentials made QBO record a **"Signed In." entry in the Audit
+    // Log** every time — roughly ten an hour, multiplied by the number of open
+    // tabs. That is an accounting audit trail, and polluting it is far worse
+    // than the problem the fetch was solving.
+    //
+    // It was also unnecessary. QBO's "Notify me if inactive for: 1 hour"
+    // setting means idle detection is client-side and it *asks* before signing
+    // you out, so answering that dialog is the entire mechanism. The fetch was
+    // guarding against a server-side clock QBO does not appear to use.
+    //
+    // Synthetic events are kept because they cost nothing and generate no
+    // network traffic, but field testing showed QBO ignores them (they carry
+    // isTrusted: false), so nothing depends on them.
     useEvents: true,
-    useKeepaliveFetch: true,
-    fetchEveryNthNudge: 2,
-    defaultRange: '2-5',
+    useKeepaliveFetch: false,
+    // Nudges are near-free and QBO ignores them anyway, so there's no reason to
+    // run them often. Dialog watching is driven by the observer and the 20s
+    // tick, neither of which depends on this interval.
+    defaultRange: '8-10',
+    // Surfaced in the popup if the fetch is ever switched back on.
+    fetchAuditWarning: 'Creates a "Signed In." entry in the QuickBooks Audit Log each time.',
     idleDialog: {
       // ALL THREE must match before anything is clicked.
       match: /are you still working|haven'?t been active|still there\?/i,
@@ -76,6 +90,11 @@ const SITE_DEFS = {
     // comfortably inside the 60-minute cap without hammering the server.
     fetchEveryNthNudge: 3,
     defaultRange: '5-8',
+    // Xero keeps the fetch: its 60-minute cap is genuinely server-side and
+    // mouse movement does not touch it. Whether Xero records these in its own
+    // login history the way QuickBooks does is UNVERIFIED — if you find it
+    // does, switch the fetch off here too and rely on the dialog alone.
+    fetchAuditWarning: 'May show up in Xero login history — unverified. Switch off if it does.',
     idleDialog: {
       match: /are you still (there|working)|haven'?t been active|session.{0,20}(expire|time ?out)/i,
       confirmLabels: [
@@ -114,14 +133,26 @@ function siteIdForHost(host) {
 
 // Bump this when the shipped defaults change and you want them re-applied to
 // existing installs (see applyDefaults() in background.js).
-const DEFAULTS_VERSION = 4;
+const DEFAULTS_VERSION = 6;
 
 // Both sites start switched OFF. Nothing touches QuickBooks or Xero until you
 // deliberately turn it on.
 function defaultSettings() {
   const s = {};
   for (const [id, def] of Object.entries(SITE_DEFS)) {
-    s[id] = { enabled: false, range: def.defaultRange, autoDismiss: true };
+    s[id] = {
+      enabled: false,
+      range: def.defaultRange,
+      autoDismiss: true,
+      // Per-site and user-controllable, because on QuickBooks the fetch writes
+      // to the Audit Log. Defaults to whatever the site definition says.
+      useFetch: !!def.useKeepaliveFetch,
+      // Reloading a discarded tab is a fresh authenticated app load, which on
+      // QuickBooks writes another "Signed In." row. Defaults off wherever the
+      // fetch is off, i.e. wherever we're being audit-log careful. A discarded
+      // tab reloads itself when you next focus it anyway.
+      reviveDiscarded: !!def.useKeepaliveFetch
+    };
   }
   return s;
 }

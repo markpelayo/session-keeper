@@ -6,6 +6,85 @@ versioning.
 
 ---
 
+## [3.4.1] — 2026-09-16
+
+### Fixed — the last remaining Audit Log writer
+
+3.4.0 removed the keepalive fetch, but missed a second source: when Chrome's
+Memory Saver discarded a QuickBooks tab, the service worker reloaded it. A
+reload is a fresh authenticated app load — the very thing that writes a
+**"Signed In."** row. Sporadic rather than every few minutes, but still there.
+
+It was also no longer justified. A discarded tab reloads itself when you next
+focus it, and with no server-side clock to maintain for QBO there is nothing to
+keep warm.
+
+Reviving discarded tabs is now the per-site **"Reload tab if Chrome discards
+it"** setting, off for QuickBooks and on for Xero (where a discarded tab can't
+run the keepalive the 60-minute cap depends on).
+
+**QuickBooks now makes no contact with Intuit's servers at all** — verified: no
+`fetch`, no `XMLHttpRequest`, no `sendBeacon`, no reload. Nudges dispatch DOM
+event objects inside the page and nothing else.
+
+### Note
+
+The nudge interval has no bearing on the Audit Log. With the fetch off, even a
+2-minute interval writes nothing, because a nudge generates no network traffic.
+8–10 minutes is about doing less pointless work, not about the log.
+
+---
+
+## [3.4.0] — 2026-09-16
+
+### Fixed — the extension was polluting the QuickBooks Audit Log
+
+Found in the field: the QBO Audit Log filled with **"Signed In." entries every
+few minutes** — around 150 over one evening.
+
+Cause: the keepalive fetch requested the app document (`location.pathname`)
+with credentials, and QBO records a fresh authenticated app load as a sign-in.
+Every keepalive wrote an audit row. The entries clustered in threes because
+each open QBO tab ran its own keepalive independently.
+
+This was worse than the problem it solved. An accounting audit trail is
+evidence; an auditor seeing 150 sign-ins in an evening has a legitimate
+question, and the answer "my browser extension did that" is not a good one.
+
+**The keepalive fetch is now off for QuickBooks.** It was never needed there:
+QBO's "Notify me if inactive for: 1 hour" setting means idle detection is
+client-side and it *asks* before signing you out, so answering that dialog is
+the whole mechanism. The fetch was defending against a server-side clock QBO
+does not appear to use.
+
+QuickBooks now generates **zero network requests** — it watches for the dialog
+and answers it. Synthetic events are retained because they're free and produce
+no traffic, but nothing depends on them (QBO ignores them).
+
+Xero keeps its fetch: the 60-minute cap there is genuinely server-side. Whether
+Xero logs those requests in its own login history is **unverified** — if it
+does, switch the fetch off for Xero too and rely on the dialog alone.
+
+### Added
+
+- Per-site **Keepalive fetch** checkbox, with the audit-log consequence spelled
+  out next to it. Off for QuickBooks, on for Xero.
+- Site strategy line in the popup now leads with "answers the idle-timeout
+  dialog", since that is what actually holds the session.
+
+### Changed
+
+- QuickBooks default interval **2–5 → 8–10 min**. With no fetch and events that
+  QBO ignores, frequent nudges bought nothing. Dialog watching is driven by the
+  observer and the 20s tick, neither of which depends on this interval.
+
+### Note
+
+Audit Log entries already written cannot be removed — the log is append-only by
+design. The existing rows will stay; no new ones will be added.
+
+---
+
 ## [3.3.0] — 2026-09-16
 
 Performance and leak pass. No change to what the extension does.

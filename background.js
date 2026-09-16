@@ -101,9 +101,15 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     const tabs = await chrome.tabs.query({ url: globsFor(def) });
     for (const tab of tabs) {
       try {
-        // Chrome's Memory Saver discards background tabs, which itself can
-        // drop the session. Bring a discarded tab back.
-        if (tab.discarded) { await chrome.tabs.reload(tab.id); continue; }
+        // Chrome's Memory Saver discards background tabs. Reviving one is a
+        // fresh authenticated app load, which on QuickBooks writes another
+        // "Signed In." row to the Audit Log — so this is opt-in per site and
+        // off wherever we're being audit-log careful. A discarded tab reloads
+        // itself when you next focus it regardless.
+        if (tab.discarded) {
+          if (settings[id].reviveDiscarded) await chrome.tabs.reload(tab.id);
+          continue;
+        }
         await chrome.tabs.sendMessage(tab.id, { type: 'KEEPALIVE_TICK' });
       } catch (e) { /* no content script in that tab yet */ }
     }

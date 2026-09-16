@@ -30,10 +30,27 @@ The two sites need different techniques, which is why they have separate toggles
 
 | | The clock | What resets it | What the extension does |
 |---|---|---|---|
-| **QuickBooks** | idle prompt, then sign-out | real mouse / keyboard only | keepalive fetch + answers the dialog |
-| **QuickBooks** | 1–3 hr idle timeout (admin-configurable) | mouse / keyboard | synthetic activity events (unreliable — see below) |
+| **QuickBooks** | 1–3 hr idle timeout, then an "Are you still working?" prompt | real mouse / keyboard only | **answers the dialog** — no network requests at all |
 | **Xero** | ~10 min inactivity prompt | mouse / keyboard | synthetic events + answers the dialog |
 | **Xero** | **60 min session cap** (fixed) | a server round-trip | silent background `fetch()` |
+
+### Why QuickBooks makes no network requests
+
+Earlier versions gave QuickBooks a keepalive fetch too. That was a mistake: the
+fetch requested the app document with credentials, and **QBO records every
+authenticated app load as a "Signed In." entry in the Audit Log** — about ten an
+hour, multiplied by the number of open tabs. Polluting an accounting audit trail
+is worse than the problem it solved.
+
+It was also unnecessary. QBO's "Notify me if inactive for" setting means idle
+detection is client-side and it *asks* before signing you out, so answering that
+dialog is the entire mechanism.
+
+Synthetic events are still sent to QuickBooks because they're free and generate
+no traffic, but field testing showed QBO ignores them (`isTrusted: false`), so
+nothing depends on them. The **Keepalive fetch** checkbox in the popup lets you
+turn the fetch back on per site if you ever need it; the audit-log consequence is
+printed next to it.
 
 Mouse movement does nothing for Xero's 60-minute cap — only a request to the
 server resets it. Xero's own advice is to press F5, which would destroy anything

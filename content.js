@@ -107,7 +107,12 @@
     return {
       enabled: !!(raw && raw.enabled),
       range: (raw && raw.range) || DEF.defaultRange,
-      autoDismiss: !(raw && raw.autoDismiss === false)
+      autoDismiss: !(raw && raw.autoDismiss === false),
+      // User-controllable per site. Off for QuickBooks by default, because the
+      // fetch writes a "Signed In." row to the Audit Log every time.
+      useFetch: raw && typeof raw.useFetch === 'boolean'
+        ? raw.useFetch
+        : !!DEF.useKeepaliveFetch
     };
   }
 
@@ -372,7 +377,7 @@
     if (DEF.useEvents) sendActivityEvents();
 
     let didFetch = false;
-    if (DEF.useKeepaliveFetch && nudgeCount % (DEF.fetchEveryNthNudge || 3) === 0) {
+    if (cfg && cfg.useFetch && nudgeCount % (DEF.fetchEveryNthNudge || 3) === 0) {
       didFetch = true;
       guard(keepaliveFetch());
     }
