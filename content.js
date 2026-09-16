@@ -153,6 +153,34 @@
     return location.origin + location.pathname;
   }
 
+  // Deciding whether the session actually died.
+  //
+  // The original version substring-matched /login|signin|identity/ against the
+  // response URL and treated any `res.url !== requestUrl` as a redirect. Both
+  // were wrong: a trailing slash or an appended query param makes the URLs
+  // differ, and those words appear in plenty of perfectly healthy Intuit URLs.
+  // Result: a successful 200 got reported as "failed (200) — session appears
+  // signed out" while the session was completely fine.
+  //
+  // A same-origin 200 now simply means healthy. Only two things count as signed
+  // out, and both are unambiguous:
+  //   1. the server says so — HTTP 401 or 403
+  //   2. we were bounced to a DIFFERENT origin whose hostname is an auth host
+  //      (accounts./login./signin./identity./auth.)
+  function classifyResponse(res) {
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, loggedOut: true };
+    }
+    try {
+      const finalUrl = new URL(res.url);
+      const crossOrigin = finalUrl.origin !== location.origin;
+      const isAuthHost = /^(accounts?|login|signin|sign-in|identity|auth)\./i.test(finalUrl.hostname);
+      if (crossOrigin && isAuthHost) return { ok: false, loggedOut: true };
+    } catch (e) { /* unparseable URL — fall through to the status check */ }
+
+    return { ok: res.ok, loggedOut: false };
+  }
+
   async function keepaliveFetch() {
     if (!alive()) return shutdown();
     const url = keepaliveTarget();
@@ -166,8 +194,14 @@
         redirect: 'follow',
         method: 'GET'
       });
-      const loggedOut = /login|signin|sign-in|identity/i.test(res.url) && res.url !== url;
-      payload = { type: 'KEEPALIVE_RESULT', ok: res.ok && !loggedOut, status: res.status, loggedOut, url };
+      const verdict = classifyResponse(res);
+      payload = {
+        type: 'KEEPALIVE_RESULT',
+        ok: verdict.ok,
+        status: res.status,
+        loggedOut: verdict.loggedOut,
+        url
+      };
     } catch (e) {
       payload = { type: 'KEEPALIVE_RESULT', ok: false, status: 0, loggedOut: false, url, error: String(e) };
     }

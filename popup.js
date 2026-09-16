@@ -42,6 +42,7 @@ function buildCard(id, def) {
     </label>` : ''}
     <div class="rangewarn" id="wn-${id}" hidden></div>
     <div class="stats" id="st-${id}">…</div>
+    <button class="reset" id="rs-${id}" type="button">Reset status</button>
   `;
   cardsEl.appendChild(card);
 
@@ -53,6 +54,11 @@ function buildCard(id, def) {
   card.querySelector(`#rg-${id}`).addEventListener('change', async (e) => {
     const cur = (await chrome.storage.local.get(defaultSettings()))[id];
     await chrome.storage.local.set({ [id]: { ...cur, range: e.target.value } });
+    render();
+  });
+
+  card.querySelector(`#rs-${id}`).addEventListener('click', async () => {
+    await chrome.storage.local.set({ [`stats_${id}`]: {} });
     render();
   });
 
@@ -87,19 +93,38 @@ async function render() {
     }
 
     const stats = (await chrome.storage.local.get({ [`stats_${id}`]: {} }))[`stats_${id}`] || {};
-    const tabs = await chrome.tabs.query({ url: def.urlGlob });
+    const tabs = await chrome.tabs.query({ url: globsFor(def) });
 
     let html = `${cfg.enabled ? 'Running' : 'Paused'} · ${tabs.length} tab${tabs.length === 1 ? '' : 's'} open<br>`;
     html += `Last nudge: ${ago(stats.lastNudge)} · total ${stats.nudges || 0}`;
 
     if (def.useKeepaliveFetch) {
+      // A health verdict is only meaningful while it's current. Expire it after
+      // 3x the maximum nudge interval (plus the fetch cadence) rather than
+      // leaving a red alarm on screen indefinitely — a stale failure was
+      // previously indistinguishable from an ongoing one.
+      const r = def.ranges[cfg.range] || def.ranges[def.defaultRange];
+      const expectedMs = r.max * (def.fetchEveryNthNudge || 3) * 60 * 1000;
+      const staleAfter = Math.max(expectedMs * 3, 15 * 60 * 1000);
+      const isStale = !stats.lastFetch || (Date.now() - stats.lastFetch) > staleAfter;
+
       html += `<br>Last keepalive: ${ago(stats.lastFetch)}`;
-      if (stats.lastFetch) {
+      if (stats.lastFetch && !isStale) {
         html += stats.lastFetchOk
           ? ` · ok (${stats.lastFetchStatus})`
           : ` · <span class="warn">failed (${stats.lastFetchStatus || 'network'})</span>`;
+      } else if (stats.lastFetch) {
+        html += ` · <span class="stale">no recent check</span>`;
       }
-      if (stats.loggedOut) html += `<br><span class="warn">Session appears signed out</span>`;
+
+      if (stats.loggedOut && !isStale) {
+        html += `<br><span class="warn">Session appears signed out</span>`;
+        if (stats.lastFetchUrl) {
+          try {
+            html += `<br><span class="stale">reported by ${new URL(stats.lastFetchUrl).host}</span>`;
+          } catch (e) { /* no-op */ }
+        }
+      }
     }
 
     if (def.idleDialog) {

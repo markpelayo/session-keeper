@@ -6,6 +6,72 @@ versioning.
 
 ---
 
+## [3.2.0] — 2026-09-16
+
+3.1.0 fixed *why* a bad health verdict was produced. This fixes the fact that
+one could never go away once produced.
+
+### Fixed
+
+- **A health verdict never expired.** "failed (200) — session appears signed
+  out" stayed on screen indefinitely, indistinguishable from an ongoing problem,
+  even while QuickBooks was demonstrably working. A verdict is now expired after
+  3× the expected keepalive interval (minimum 15 min) and shown as a grey
+  "no recent check" instead of a red alarm.
+- **Verdicts survived a browser restart.** After a macOS logout took Chrome with
+  it, the popup still showed a red warning describing a session that no longer
+  existed. `chrome.runtime.onStartup` now clears the volatile health fields
+  (`lastFetchOk`, `lastFetchStatus`, `loggedOut`, `lastFetch`) and lets the next
+  keepalive establish the truth. Cumulative counters are preserved.
+
+### Added
+
+- **Reset status** button per site, for clearing a stuck reading by hand.
+- Failures now record the URL that produced them, and the popup shows
+  "reported by &lt;host&gt;". A verdict written by some other tab is no longer
+  anonymous — which is what made the earlier false positive so hard to place.
+
+---
+
+## [3.1.0] — 2026-09-16
+
+### Fixed
+
+- **False "failed (200) — session appears signed out".** Reported while the
+  session was completely healthy and still usable. The logged-out check was:
+
+  ```js
+  /login|signin|sign-in|identity/i.test(res.url) && res.url !== url
+  ```
+
+  Both halves were unsound. `res.url !== url` is true for trivial reasons — a
+  trailing slash or an appended query param counts — and the substring match
+  hits plenty of healthy Intuit URLs. A 200 therefore got reported as a failure.
+
+  A same-origin 200 now simply means healthy. Only two things count as signed
+  out, both unambiguous: an HTTP **401/403**, or a redirect to a **different
+  origin** whose hostname is an auth host (`accounts.`, `login.`, `signin.`,
+  `identity.`, `auth.`). Verified against trailing-slash, query-param and
+  `/app/identitysettings` responses (all healthy) versus a real bounce to
+  `accounts.intuit.com` and 401/403 (all correctly flagged).
+
+- **QuickBooks matched all of `*.intuit.com`.** It ran on ProAdvisor pages,
+  Intuit account pages and the marketing site — wasting nudges and letting an
+  unrelated tab poison QuickBooks' shared stats, which is the likeliest reason
+  a bad reading appeared while the QBO tab itself was fine. Now scoped to
+  `qbo.intuit.com` and `*.qbo.intuit.com`.
+
+- Sign-in and identity hosts (`accounts.`, `login.`, `identity.`, …) are now
+  skipped outright. There is nothing to keep alive on a login page, and nudging
+  one produced exactly these spurious readings.
+
+### Changed
+
+- `sites.js` gained `extraGlobs` and `globsFor()` so a site can declare several
+  URL patterns; tab queries use all of them.
+
+---
+
 ## [3.0.1] — 2026-09-16
 
 ### Fixed

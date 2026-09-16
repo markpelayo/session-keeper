@@ -31,7 +31,7 @@ function scheduleAlarm() {
 async function reinjectOpenTabs() {
   for (const def of Object.values(SITE_DEFS)) {
     let tabs = [];
-    try { tabs = await chrome.tabs.query({ url: def.urlGlob }); } catch (e) { continue; }
+    try { tabs = await chrome.tabs.query({ url: globsFor(def) }); } catch (e) { continue; }
     for (const tab of tabs) {
       if (tab.discarded) continue;
       try {
@@ -49,7 +49,29 @@ chrome.runtime.onInstalled.addListener(async () => {
   scheduleAlarm();
   await reinjectOpenTabs();
 });
-chrome.runtime.onStartup.addListener(scheduleAlarm);
+// Health readings describe a live session. After a browser restart (or a macOS
+// logout that took Chrome with it) the session they described is gone, so
+// keeping the old verdict on screen is just misinformation — it showed a red
+// "session appears signed out" for a session that no longer existed. Clear the
+// volatile fields on startup and let the next keepalive establish the truth.
+// Cumulative counters are deliberately preserved.
+async function clearVolatileStats() {
+  for (const id of Object.keys(SITE_DEFS)) {
+    const key = `stats_${id}`;
+    const cur = (await chrome.storage.local.get({ [key]: {} }))[key] || {};
+    delete cur.lastFetchOk;
+    delete cur.lastFetchStatus;
+    delete cur.lastFetchUrl;
+    delete cur.loggedOut;
+    delete cur.lastFetch;
+    await chrome.storage.local.set({ [key]: cur });
+  }
+}
+
+chrome.runtime.onStartup.addListener(async () => {
+  await clearVolatileStats();
+  scheduleAlarm();
+});
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== ALARM_NAME) return;
@@ -57,7 +79,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
   for (const [id, def] of Object.entries(SITE_DEFS)) {
     if (!settings[id] || !settings[id].enabled) continue;
-    const tabs = await chrome.tabs.query({ url: def.urlGlob });
+    const tabs = await chrome.tabs.query({ url: globsFor(def) });
     for (const tab of tabs) {
       try {
         // Chrome's Memory Saver discards background tabs, which itself can
@@ -98,7 +120,13 @@ chrome.runtime.onMessage.addListener((msg) => {
       lastFetch: Date.now(),
       lastFetchOk: msg.ok,
       lastFetchStatus: msg.status,
+      // Recorded so a bad reading can be traced to the tab that produced it.
+      lastFetchUrl: msg.url,
       loggedOut: msg.loggedOut
     });
+  }
+
+  if (msg.type === 'RESET_STATS' && msg.site) {
+    chrome.storage.local.set({ [`stats_${msg.site}`]: {} });
   }
 });

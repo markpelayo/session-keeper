@@ -15,8 +15,13 @@
 const SITE_DEFS = {
   qbo: {
     label: 'QuickBooks Online',
-    hostPattern: /(^|\.)intuit\.com$/i,
-    urlGlob: 'https://*.intuit.com/*',
+    // Scoped to the QBO app itself, NOT all of intuit.com. Previously this
+    // matched *.intuit.com, so it also ran on ProAdvisor pages, Intuit account
+    // pages and so on — which both wasted nudges and let an unrelated tab
+    // poison this site's shared stats.
+    hostPattern: /(^|\.)qbo\.intuit\.com$/i,
+    urlGlob: 'https://*.qbo.intuit.com/*',
+    extraGlobs: ['https://qbo.intuit.com/*'],
     // Strategy: activity events + keepalive fetch + idle-dialog dismissal.
     //
     // Confirmed in the field (2026-09-16): QBO shows its own "Are you still
@@ -84,7 +89,12 @@ const SITE_DEFS = {
   }
 };
 
+// Sign-in / identity hosts. There's nothing to keep alive on a login page, and
+// nudging one is how you get spurious "session appears signed out" readings.
+const SKIP_HOST = /^(accounts?|login|signin|sign-in|identity|auth)\./i;
+
 function siteIdForHost(host) {
+  if (SKIP_HOST.test(host)) return null;
   for (const [id, def] of Object.entries(SITE_DEFS)) {
     if (def.hostPattern.test(host)) return id;
   }
@@ -105,6 +115,11 @@ function defaultSettings() {
   return s;
 }
 
+// Every URL pattern a site should be queried/injected for.
+function globsFor(def) {
+  return [def.urlGlob].concat(def.extraGlobs || []);
+}
+
 if (typeof module !== 'undefined') {
-  module.exports = { SITE_DEFS, siteIdForHost, defaultSettings, DEFAULTS_VERSION };
+  module.exports = { SITE_DEFS, siteIdForHost, defaultSettings, DEFAULTS_VERSION, globsFor, SKIP_HOST };
 }
