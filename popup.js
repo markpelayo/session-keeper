@@ -35,6 +35,11 @@ function buildCard(id, def) {
       </select>
     </div>
     <div class="ceiling">${def.ceilingNote}</div>
+    ${def.idleDialog ? `
+    <label class="check">
+      <input type="checkbox" id="ad-${id}" />
+      <span>Auto-answer the “still working?” dialog</span>
+    </label>` : ''}
     <div class="rangewarn" id="wn-${id}" hidden></div>
     <div class="stats" id="st-${id}">…</div>
   `;
@@ -50,6 +55,15 @@ function buildCard(id, def) {
     await chrome.storage.local.set({ [id]: { ...cur, range: e.target.value } });
     render();
   });
+
+  const adEl = card.querySelector(`#ad-${id}`);
+  if (adEl) {
+    adEl.addEventListener('change', async (e) => {
+      const cur = (await chrome.storage.local.get(defaultSettings()))[id];
+      await chrome.storage.local.set({ [id]: { ...cur, autoDismiss: e.target.checked } });
+      render();
+    });
+  }
 }
 
 async function render() {
@@ -59,6 +73,8 @@ async function render() {
     const cfg = settings[id] || { enabled: false, range: def.defaultRange };
     document.getElementById(`en-${id}`).checked = cfg.enabled;
     document.getElementById(`rg-${id}`).value = cfg.range;
+    const adEl = document.getElementById(`ad-${id}`);
+    if (adEl) adEl.checked = cfg.autoDismiss !== false;
 
     // Surface the caution attached to the widest ("max") range.
     const warnEl = document.getElementById(`wn-${id}`);
@@ -84,6 +100,11 @@ async function render() {
           : ` · <span class="warn">failed (${stats.lastFetchStatus || 'network'})</span>`;
       }
       if (stats.loggedOut) html += `<br><span class="warn">Session appears signed out</span>`;
+    }
+
+    if (def.idleDialog) {
+      html += `<br>Dialogs answered: ${stats.dismissals || 0}`;
+      if (stats.lastDismiss) html += ` · last ${ago(stats.lastDismiss)}`;
     }
     document.getElementById(`st-${id}`).innerHTML = html;
   }

@@ -3,9 +3,13 @@
 // Runs on intuit.com and xero.com tabs only. Detects which site it's on and
 // applies that site's strategy.
 //
-// It NEVER dispatches click, mousedown, mouseup, or a printable keystroke, and
-// it NEVER reloads the page. It cannot press a button, submit a form, save a
-// transaction, type into a focused field, or discard unsaved work.
+// It never types a printable character and never reloads the page, so work in
+// progress is never lost.
+//
+// As of 3.0.0 there is exactly ONE click: the "Continue working" button on the
+// idle-timeout dialog. See "layer D" below for the three conditions that must
+// all hold before that happens. It cannot press "Sign out", and it cannot touch
+// any other dialog or control on the site.
 
 (() => {
   const SITE_ID = siteIdForHost(location.hostname);
@@ -170,6 +174,121 @@
     report(payload);
   }
 
+  // ------------------------------------------- layer D: idle-dialog dismissal
+  //
+  // This is the ONE place the extension clicks, and it exists because the event
+  // layer above turned out not to work on QuickBooks: QBO shows an "Are you
+  // still working?" dialog and ignores synthetic input, and leaving that dialog
+  // unanswered signs you out. So the dialog has to be answered.
+  //
+  // Three independent conditions must ALL hold before a click happens:
+  //   1. the surrounding dialog text matches this site's idle-prompt wording
+  //   2. the button's own label is an exact match for a session-extend label
+  //   3. the label does NOT match the deny list (sign out / log out / cancel)
+  //
+  // So it can only ever press a button that says "Continue working" (or an
+  // equivalent) inside a box that says "Are you still working?". It cannot
+  // press "Sign out", and it cannot touch any other dialog on the site.
+
+  let lastDismissAt = 0;
+
+  function isVisible(el) {
+    try {
+      const cs = getComputedStyle(el);
+      // Style checks are layout-independent, so these always hold.
+      if (cs.visibility === 'hidden' || cs.display === 'none' || cs.opacity === '0') return false;
+
+      // Geometry is NOT reliable when the tab is hidden or the window is
+      // minimized — Chrome may skip layout altogether and report 0x0 for every
+      // element. Enforcing a size there would mean the dialog is found and then
+      // thrown away as "invisible", which is precisely when we most need to
+      // answer it. So the size check only applies when the page is actually
+      // being rendered.
+      if (document.visibilityState === 'hidden' || document.hidden) return true;
+
+      const r = el.getBoundingClientRect();
+      return r.width >= 1 && r.height >= 1;
+    } catch (e) { return false; }
+  }
+
+  function buttonLabel(el) {
+    return String(el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function tryDismissIdleDialog() {
+    const cfg = DEF.idleDialog;
+    if (!cfg) return false;
+    if (Date.now() - lastDismissAt < 3000) return false; // never machine-gun clicks
+
+    const buttons = document.querySelectorAll(
+      'button, [role="button"], input[type="button"], input[type="submit"], a[role="button"]'
+    );
+
+    for (const btn of buttons) {
+      const label = buttonLabel(btn);
+      if (!label) continue;
+
+      // Condition 2 and 3: the label itself.
+      if (!cfg.confirmText.test(label)) continue;
+      if (cfg.denyText.test(label)) continue;
+      if (!isVisible(btn) || btn.disabled) continue;
+
+      // Condition 1: an ancestor must actually be the idle prompt.
+      let node = btn.parentElement;
+      let hops = 0;
+      let inIdleDialog = false;
+      while (node && hops++ < 8) {
+        const text = String(node.innerText || '');
+        if (text.length < 4000 && cfg.match.test(text)) { inIdleDialog = true; break; }
+        node = node.parentElement;
+      }
+      if (!inIdleDialog) continue;
+
+      try {
+        btn.click();
+      } catch (e) {
+        return false;
+      }
+      lastDismissAt = Date.now();
+      report({ type: 'DIALOG_DISMISSED', label });
+      return true;
+    }
+    return false;
+  }
+
+  async function dismissEnabled() {
+    if (!DEF.idleDialog || !alive()) return false;
+    try {
+      const all = await chrome.storage.local.get(defaultSettings());
+      const cfg = all[SITE_ID];
+      return !!(cfg && cfg.enabled && cfg.autoDismiss !== false);
+    } catch (e) {
+      if (isInvalidated(e)) shutdown();
+      return false;
+    }
+  }
+
+  async function checkForDialog() {
+    if (!(await dismissEnabled())) return;
+    tryDismissIdleDialog();
+  }
+
+  // The dialog can appear at any moment, not just on our schedule, so watch the
+  // DOM for it as well as checking on every tick.
+  if (DEF.idleDialog) {
+    let pending = null;
+    const observer = new MutationObserver(() => {
+      if (!alive()) { try { observer.disconnect(); } catch (e) {} return; }
+      if (pending) return;
+      pending = setTimeout(() => { pending = null; guard(checkForDialog()); }, 400);
+    });
+    try {
+      observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    } catch (e) { /* no-op */ }
+  }
+
   // ------------------------------------------------------------------ runner
 
   function report(payload) {
@@ -215,6 +334,10 @@
     // Fail closed: if settings are somehow missing, stay off rather than on.
     const cfg = all[SITE_ID] || { enabled: false, range: DEF.defaultRange };
     if (!cfg.enabled) { nextDueAt = 0; return; }
+
+    // Catch a dialog that appeared while the tab was throttled and the
+    // MutationObserver callback was deferred.
+    if (cfg.autoDismiss !== false) tryDismissIdleDialog();
 
     if (cfg.range !== currentRangeKey || !nextDueAt) {
       reschedule(cfg.range);

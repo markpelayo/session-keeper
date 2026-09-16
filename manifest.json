@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Session Keeper — QuickBooks & Xero",
-  "version": "2.6.0",
-  "description": "Keeps QuickBooks Online and Xero from signing you out for inactivity, using randomised timing and without ever clicking, typing or reloading your page.",
+  "version": "3.0.1",
+  "description": "Keeps QuickBooks Online and Xero from signing you out for inactivity. Randomised timing; never types or reloads your page. Clicks only the \"Continue working\" button on the idle-timeout dialog.",
   "permissions": ["alarms", "storage", "scripting"],
   "host_permissions": [
     "https://*.intuit.com/*",

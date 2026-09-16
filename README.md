@@ -30,8 +30,9 @@ The two sites need different techniques, which is why they have separate toggles
 
 | | The clock | What resets it | What the extension does |
 |---|---|---|---|
-| **QuickBooks** | 1–3 hr idle timeout (admin-configurable) | mouse / keyboard | synthetic activity events |
-| **Xero** | ~10 min inactivity prompt | mouse / keyboard | synthetic activity events |
+| **QuickBooks** | idle prompt, then sign-out | real mouse / keyboard only | keepalive fetch + answers the dialog |
+| **QuickBooks** | 1–3 hr idle timeout (admin-configurable) | mouse / keyboard | synthetic activity events (unreliable — see below) |
+| **Xero** | ~10 min inactivity prompt | mouse / keyboard | synthetic events + answers the dialog |
 | **Xero** | **60 min session cap** (fixed) | a server round-trip | silent background `fetch()` |
 
 Mouse movement does nothing for Xero's 60-minute cap — only a request to the
@@ -57,12 +58,56 @@ is only the "are you still there?" prompt, so max is 9; missing one there is
 cosmetic, because the keepalive fetch is what protects the actual session.
 Selecting either max shows a caution explaining its assumption.
 
-## What it will not do
+## The one click (3.0.0)
 
-- **no** `click`, `mousedown`, `mouseup` — cannot press a button
-- **no** `submit` — cannot submit a form or save a transaction
+Field testing showed QuickBooks **ignores synthetic input events** — almost
+certainly because they carry `isTrusted: false` — and shows its own "Are you
+still working?" dialog. Leaving that dialog unanswered signs you out, so it has
+to be answered. That's the only reason this extension clicks anything.
+
+Three independent conditions must **all** hold before a click happens:
+
+1. the surrounding dialog text matches that site's idle-prompt wording
+2. the button's label is an **exact** match for a session-extend label
+3. the label does not match the deny list (`sign out`, `log out`, `cancel`, `no…`)
+
+So it can only press "Continue working" inside a box that says "Are you still
+working?". Bare "Continue" is deliberately rejected for QuickBooks, since the
+real label is "Continue working" and accepting the generic word would only widen
+the blast radius. Verified against `Sign out`, `Delete`, `Save and close`,
+`Cancel` and `Yes` — all rejected, as are delete-confirmation and unsaved-changes
+dialogs.
+
+Clicks are rate-limited to one per 3 seconds, and the popup counts them so you
+can see exactly when it acted. Turn it off per-site with the
+**"Auto-answer the 'still working?' dialog"** checkbox.
+
+### Does it work while the window is minimized?
+
+Yes. There are two triggers, and the reliable one isn't a page timer:
+
+| Trigger | Minimized behaviour |
+|---|---|
+| `MutationObserver` (400 ms debounce) | Throttled — Chrome can stretch the debounce to ~1 minute in a hidden tab |
+| `chrome.alarms` → message → `tick()` | **Unaffected.** Fires every 30 s in the service worker; extension messaging isn't page-throttled |
+
+So the dialog is answered within about 30 seconds even when minimized.
+`element.click()` is a DOM call, not a real input event, so it needs neither
+focus nor visibility.
+
+The one thing minimizing genuinely breaks is layout: Chrome may skip it, making
+every element report 0×0. That's what 3.0.1 fixes — see the changelog.
+
+If Chrome's Memory Saver **discards** the tab entirely, the page and its DOM are
+gone, so there's no dialog to answer. The service worker detects the discarded
+tab and reloads it, which re-establishes the session.
+
+## What it still will not do
+
 - **no** printable keystroke — the only key event is Shift, which inserts nothing
+- **no** `submit` — cannot submit a form or save a transaction
 - **no** `location.reload()` — never refreshes the page you're working in
+- **no** click on anything except the one button described above
 
 The one exception, in `background.js`: if Chrome's Memory Saver has already
 **discarded** a tab, the extension reloads it. A discarded tab has already lost

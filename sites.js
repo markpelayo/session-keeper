@@ -17,10 +17,25 @@ const SITE_DEFS = {
     label: 'QuickBooks Online',
     hostPattern: /(^|\.)intuit\.com$/i,
     urlGlob: 'https://*.intuit.com/*',
-    // Strategy: synthetic activity events only.
+    // Strategy: activity events + keepalive fetch + idle-dialog dismissal.
+    //
+    // Confirmed in the field (2026-09-16): QBO shows its own "Are you still
+    // working?" dialog and does NOT count synthetic pointer/key events as
+    // activity — almost certainly because they carry isTrusted: false. So the
+    // event layer is kept (harmless, may still help) but is no longer relied on.
     useEvents: true,
-    useKeepaliveFetch: false,
-    defaultRange: '8-10',
+    useKeepaliveFetch: true,
+    fetchEveryNthNudge: 2,
+    defaultRange: '2-5',
+    idleDialog: {
+      // ALL THREE must match before anything is clicked.
+      match: /are you still working|haven'?t been active|still there\?/i,
+      // Bare "Continue" is deliberately NOT accepted here: QBO's button is
+      // labelled "Continue working", so allowing the generic word would only
+      // widen the blast radius for no benefit.
+      confirmText: /^(continue working|keep working|i'?m still (here|working)|stay signed in)$/i,
+      denyText: /sign ?out|log ?out|cancel|no,?\s/i
+    },
     ranges: {
       '2-5':  { label: '2–5 minutes',  min: 2,  max: 5  },
       '5-8':  { label: '5–8 minutes',  min: 5,  max: 8  },
@@ -48,6 +63,11 @@ const SITE_DEFS = {
     // comfortably inside the 60-minute cap without hammering the server.
     fetchEveryNthNudge: 3,
     defaultRange: '5-8',
+    idleDialog: {
+      match: /are you still (there|working)|haven'?t been active|session.{0,20}(expire|time ?out)/i,
+      confirmText: /^(continue|continue working|keep working|stay signed in|i'?m still (here|working)|yes,? ?keep me signed in)$/i,
+      denyText: /sign ?out|log ?out|cancel|no,?\s/i
+    },
     ranges: {
       '2-4': { label: '2–4 minutes', min: 2, max: 4 },
       '3-6': { label: '3–6 minutes', min: 3, max: 6 },
@@ -73,14 +93,14 @@ function siteIdForHost(host) {
 
 // Bump this when the shipped defaults change and you want them re-applied to
 // existing installs (see applyDefaults() in background.js).
-const DEFAULTS_VERSION = 3;
+const DEFAULTS_VERSION = 4;
 
 // Both sites start switched OFF. Nothing touches QuickBooks or Xero until you
 // deliberately turn it on.
 function defaultSettings() {
   const s = {};
   for (const [id, def] of Object.entries(SITE_DEFS)) {
-    s[id] = { enabled: false, range: def.defaultRange };
+    s[id] = { enabled: false, range: def.defaultRange, autoDismiss: true };
   }
   return s;
 }

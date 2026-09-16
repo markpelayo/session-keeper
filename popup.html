@@ -40,6 +40,8 @@
   input:checked + .slider:before { transform: translateX(17px); }
 
   .ceiling { font-size:10px; color:#999; margin-top:6px; line-height:1.4; }
+  .check { display:flex; align-items:flex-start; gap:6px; margin-top:9px; font-size:11px; color:#333; cursor:pointer; }
+  .check input { margin:1px 0 0; flex:none; }
   .rangewarn {
     font-size:10px; line-height:1.45; margin-top:7px;
     background:#fff6e0; border-left:3px solid #e0a800;
@@ -52,7 +54,7 @@
 </head>
 <body>
   <h1>Session Keeper</h1>
-  <p class="sub">Stops idle sign-outs. Never clicks, types, or reloads your page.</p>
+  <p class="sub">Stops idle sign-outs. Never types or reloads your page.</p>
 
   <div id="cards"></div>
 

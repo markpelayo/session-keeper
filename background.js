@@ -83,6 +83,16 @@ chrome.runtime.onMessage.addListener((msg) => {
       bumpStats(msg.site, { lastNudge: Date.now(), nudges: (cur.nudges || 0) + 1 });
     });
   }
+  if (msg.type === 'DIALOG_DISMISSED') {
+    chrome.storage.local.get({ [`stats_${msg.site}`]: {} }).then((r) => {
+      const cur = r[`stats_${msg.site}`] || {};
+      bumpStats(msg.site, {
+        lastDismiss: Date.now(),
+        dismissals: (cur.dismissals || 0) + 1,
+        lastDismissLabel: msg.label
+      });
+    });
+  }
   if (msg.type === 'KEEPALIVE_RESULT') {
     bumpStats(msg.site, {
       lastFetch: Date.now(),

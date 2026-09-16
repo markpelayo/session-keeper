@@ -6,6 +6,78 @@ versioning.
 
 ---
 
+## [3.0.1] — 2026-09-16
+
+### Fixed
+
+- **Dialog dismissal did not work when the window was minimized.** The
+  visibility check rejected any button smaller than 1×1, but Chrome can skip
+  layout entirely for a minimized or hidden tab, making every element report
+  0×0. The dialog was found and then discarded as "invisible" — exactly when
+  answering it matters most. Geometry is now only checked when the page is
+  actually being rendered; style checks (`display`, `visibility`, `opacity`) are
+  layout-independent and still apply always.
+
+### Notes on minimized behaviour
+
+Detection itself was already fine. The `MutationObserver` path has a 400 ms
+debounce that Chrome throttles to as much as a minute in a hidden tab, but the
+`chrome.alarms` path is not a page timer: it fires every 30 s in the service
+worker and messages the content script, so the dialog is answered within ~30 s
+even while minimized. `element.click()` needs neither focus nor visibility.
+
+---
+
+## [3.0.0] — 2026-09-16
+
+Major version because the "never clicks anything" guarantee from 1.0.0 no longer
+holds. It now clicks exactly one button, under tight conditions.
+
+### Context
+
+Field testing showed the earlier approach did not work on QuickBooks. With the
+QBO toggle on and nudges firing, QBO still showed its **"Are you still working?"**
+dialog. Two conclusions:
+
+- QBO **ignores synthetic input events**, almost certainly because they carry
+  `isTrusted: false` — the risk flagged in 1.0.0's limitations.
+- QBO has a pre-sign-out idle prompt. Earlier versions incorrectly documented
+  this as Xero-only. Leaving the dialog unanswered signs you out, so the dialog
+  is the thing that actually has to be handled.
+
+### Added
+
+- **Idle-dialog dismissal ("layer D").** Detects the idle prompt via a
+  `MutationObserver` plus a check on every tick, and clicks the session-extend
+  button. Three independent conditions must all hold first:
+  1. surrounding dialog text matches the site's idle-prompt wording
+  2. the button label is an exact match for a session-extend label
+  3. the label does not match the deny list (`sign out`, `log out`, `cancel`, `no…`)
+
+  Bare "Continue" is rejected for QuickBooks — the real label is "Continue
+  working", and accepting the generic word would only widen the blast radius.
+  Verified against `Sign out`, `Delete`, `Save and close`, `Cancel`, `Yes`, and
+  against delete-confirmation and unsaved-changes dialogs: all rejected.
+- Clicks rate-limited to one per 3 seconds.
+- Per-site **"Auto-answer the 'still working?' dialog"** checkbox, on by default.
+- Popup now reports dialogs answered and when.
+
+### Changed
+
+- **QuickBooks now uses the keepalive fetch too** (every 2nd nudge), no longer
+  relying on synthetic events that demonstrably don't register.
+- QuickBooks default interval **8–10 → 2–5 min**. 8–10 sat right on top of the
+  idle prompt.
+- `manifest.json` description and `content.js` header no longer claim the
+  extension never clicks, because that is no longer true.
+
+### Still guaranteed
+
+No printable keystroke, no `submit`, no `location.reload()`, and no click on
+anything other than the one button described above.
+
+---
+
 ## [2.6.0] — 2026-09-12
 
 ### Changed
