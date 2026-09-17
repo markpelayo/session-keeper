@@ -9,7 +9,19 @@
     width: 320px; margin: 0; padding: 16px; color: #1a1a1a;
   }
   h1 { font-size: 14px; margin: 0 0 2px; }
-  .sub { font-size: 11px; color: #777; margin: 0 0 16px; }
+  .sub { font-size: 11px; color: #777; margin: 0 0 16px; line-height: 1.6; }
+
+  /* Version badge — text is filled in from the manifest at runtime, so it can
+     never drift out of sync with the actual build. */
+  .ver {
+    display: inline-block; margin-left: 6px; padding: 1px 6px;
+    font-size: 10px; font-weight: 600; vertical-align: 2px;
+    color: #6b4f00; background: #fff3cd; border: 1px solid #f0d98c;
+    border-radius: 10px; text-decoration: none;
+  }
+  .ver:hover { background: #ffe9a8; border-color: #e0c46a; }
+  .by { color: #999; text-decoration: none; }
+  .by:hover { color: #555; text-decoration: underline; }
 
   .card { border: 1px solid #e3e3e3; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
   .card.qbo .name::before { background: var(--green); }
@@ -60,8 +72,13 @@
 </style>
 </head>
 <body>
-  <h1>Session Keeper</h1>
-  <p class="sub">Stops idle sign-outs. Never types or reloads your page.</p>
+  <h1>Session Keeper<a class="ver" id="ver" href="https://github.com/markpelayo/session-keeper"
+       target="_blank" rel="noopener noreferrer" title="View the source on GitHub">v…</a></h1>
+  <p class="sub">
+    Stops idle sign-outs. Never types or reloads your page.<br>
+    <a class="by" href="https://github.com/markpelayo/session-keeper"
+       target="_blank" rel="noopener noreferrer">by markpelayo</a>
+  </p>
 
   <div id="cards"></div>
 

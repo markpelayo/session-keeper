@@ -1,5 +1,25 @@
 const cardsEl = document.getElementById('cards');
 
+// Read the version from the manifest rather than hard-coding it in the markup,
+// so the badge can't fall out of step with the build after a version bump.
+// The repo URL comes from manifest.homepage_url for the same reason — one place
+// to change it, and Chrome also shows it on chrome://extensions.
+(() => {
+  const verEl = document.getElementById('ver');
+  try {
+    const m = chrome.runtime.getManifest();
+    if (verEl) verEl.textContent = 'v' + m.version;
+    if (m.homepage_url) {
+      for (const el of document.querySelectorAll('#ver, .by')) el.href = m.homepage_url;
+    }
+  } catch (e) {
+    // getManifest() failed (orphaned context). Drop the badge rather than
+    // leaving the "v…" placeholder on screen. The original catch called
+    // .remove() on the same lookup that had just failed, which would throw.
+    if (verEl && verEl.remove) verEl.remove();
+  }
+})();
+
 function ago(ts) {
   if (!ts) return 'never';
   const s = Math.floor((Date.now() - ts) / 1000);

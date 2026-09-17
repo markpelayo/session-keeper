@@ -6,6 +6,50 @@ versioning.
 
 ---
 
+## [3.5.0] — 2026-09-17
+
+### Added
+
+- **Version badge next to the extension name in the popup**, linking to the
+  repository. The number is read from the manifest at runtime via
+  `chrome.runtime.getManifest()` rather than written into the markup, so it
+  can't drift out of sync after a version bump.
+- **"by markpelayo"** byline under the tagline, same link.
+- `homepage_url` in the manifest, so the `chrome://extensions` card links to the
+  repo too.
+
+Both links use `target="_blank"` with `rel="noopener noreferrer"`.
+
+### Confirmed working
+
+QuickBooks ran clean after 3.4.1 — no new "Signed In." entries in the Audit Log.
+
+---
+
+## [3.5.0] — 2026-09-17
+
+### Added
+
+- **Version badge** next to the title in the popup, and a **"by markpelayo"**
+  byline. Both link to the GitHub repo and open in a new tab
+  (`rel="noopener noreferrer"`).
+- `homepage_url` in the manifest. The popup reads both the version and the repo
+  URL back from the manifest at runtime, so neither can drift out of step with
+  the build — and Chrome now shows the repo link on `chrome://extensions` too.
+
+### Fixed
+
+- The version-badge fallback called `.remove()` on the same element lookup that
+  had just failed, which would itself throw. It now checks the element exists
+  first.
+
+### Confirmed in the field
+
+No new "Signed In." entries in the QuickBooks Audit Log after 3.4.1. The
+audit-log problem introduced in 3.0.0 is resolved.
+
+---
+
 ## [3.4.1] — 2026-09-16
 
 ### Fixed — the last remaining Audit Log writer
